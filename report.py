@@ -1,15 +1,18 @@
 from datetime import datetime
-import compare
+import sys, os
 import csv
 import numpy
 import collections
 import argparse
+from calendar import day_name
 
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
+import compare
 
 def get_branch(platform):
     if platform == 'Android' or platform.startswith('OSX'):
-        return 63
-    return 131
+        return compare.branch_map['Inbound']['pgo']['id']
+    return compare.branch_map['Inbound']['nonpgo']['id']
 
 
 def get_all_test_tuples():
@@ -24,12 +27,8 @@ def get_tuple(test, platform):
     return [(compare.test_map[test]['id'], get_branch(platform), compare.platform_map[platform], test, platform)]
 
 
-def generate_report(tuple_list, filepath='report.csv', filepath2='average.csv', mode='b'):
-    """
-    Mode can be c for the complete data or a for just the averages or b for both
-    """
+def generate_report(tuple_list, filepath):
     avg = []
-    rep = []
 
     for test in tuple_list:
         testid, branchid, platformid = test[:3]
@@ -50,48 +49,34 @@ def generate_report(tuple_list, filepath='report.csv', filepath2='average.csv', 
             for time in time_dict:
                 weekday = datetime.strptime(time, '%Y-%m-%d').strftime('%A')
                 variance = numpy.var(time_dict[time])
-                runs = len(time_dict[time])
                 days[weekday] = days.get(weekday, []) + [variance]
-                new_line = [" ".join(test[3:])]
-                new_line.extend([time, "%.3f" % variance, weekday, runs])
-                rep.append(new_line)
 
-            tmp_avg = []
-            for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
-                average = numpy.average(sorted(days[day])[5:45])
-                line = [" ".join(test[3:]), day, "%.3f" % average]
-                tmp_avg.append(line)
+            line = ["-".join(test[3:])]
+            for day in day_name:
+                # removing top and bottom 10% to reduce outlier influence
+                tenth = len(days[day])/10
+                average = numpy.average(sorted(days[day])[tenth:tenth*9 + 1])
+                line.append("%.3f" % average)
                 week_avgs.append(average)
 
             outliers = is_normal(week_avgs)
             for j in range(7):
-                line = tmp_avg[j]
                 if j in outliers:
-                    tmp_avg[j] = line + ['No']
+                    line[j + 1] = "**" + str(line[j + 1]) + "**"
 
-            avg.extend(tmp_avg)
+            avg.append(line)
 
-    if mode == 'c' or mode == 'b':
-        # Complete mode
-        with open(filepath, 'wb') as report:
-            report_header = csv.writer(report, quoting=csv.QUOTE_ALL)
-            report_header.writerow(['test', 'date', 'variance', 'weekday', 'test runs'])
-            rep = sorted(rep)
-            for line in rep:
-                wr = csv.writer(report, quoting=csv.QUOTE_ALL)
-                wr.writerow(line)
-
-    if mode == 'a' or mode == 'b':
-        # Averages mode
-        with open(filepath2, 'wb') as report:
-            avgs_header = csv.writer(report, quoting=csv.QUOTE_ALL)
-            avgs_header.writerow(['test, platform', 'weekday', 'average', 'is normal?'])
-            for line in avg:
-                out = csv.writer(report, quoting=csv.QUOTE_ALL)
-                out.writerow(line)
+    with open(filepath, 'wb') as report:
+        avgs_header = csv.writer(report, quoting=csv.QUOTE_ALL)
+        avgs_header.writerow(['test-platform'] + list(day_name))
+        for line in avg:
+            out = csv.writer(report, quoting=csv.QUOTE_ALL)
+            out.writerow(line)
 
 
 def is_normal(y):
+    # This is a crude initial attempt at detecting normal distributions
+    # TODO: Improve this
     limit = 1.5
     clean_week = []
     outliers = []
@@ -115,16 +100,20 @@ def is_normal(y):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate weekdays reports")
-    parser.add_argument("s", type=str, help="all - report with averages for all tests, \
-    test platform - complete daily report for that platform")
+    parser.add_argument("--test", help="show only the test named TEST")
+    parser.add_argument("--platform", help="show only the platform named PLATFORM")
     args = parser.parse_args()
-    if args.s == 'all':
-        tests = get_all_test_tuples()[:3]
-        generate_report(tests, mode='a')
-    else:
-        test, platform = args.s.split(" ")
-        f = 'report-%s-%s.csv' % (test, platform)
-        generate_report(get_tuple(test, platform), filepath=f, mode='c')
+    tuple_list = get_all_test_tuples()
+    f = 'report'
+    if args.platform:
+        tuple_list = filter(lambda x: x[4] == args.platform, tuple_list)
+        f += '-%s' % args.platform
+
+    if args.test:
+        tuple_list = filter(lambda x: x[3] == args.test, tuple_list)
+        f += '-%s' % args.test
+
+    generate_report(tuple_list, filepath=f + '.csv')
 
 if __name__ == "__main__":
     main()
